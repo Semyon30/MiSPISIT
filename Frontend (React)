@@ -1,0 +1,120 @@
+// frontend/src/App.js
+
+import React, { useState, useEffect } from 'react';
+
+function App() {
+  const [images, setImages] = useState([]);       // Список изображений с тегами
+  const [selectedFile, setSelectedFile] = useState(null); // Файл для загрузки
+  const [previewUrl, setPreviewUrl] = useState('');       // Ссылка для предпросмотра
+  const [query, setQuery] = useState('');         // Запрос для поиска
+
+  // Функция загрузки списка изображений (всех или по запросу)
+  const fetchImages = (search=false) => {
+    let url = 'http://localhost:8000/api/images';
+    if (search && query) {
+      url = `http://localhost:8000/api/search?q=${encodeURIComponent(query)}`;
+    }
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        setImages(data.images);
+      })
+      .catch(err => console.error("Ошибка при получении изображений:", err));
+  };
+
+  // При загрузке компонента запрашиваем все изображения
+  useEffect(() => {
+    fetchImages();
+  }, []);
+
+  // Обработчик выбора файла
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setSelectedFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    }
+  };
+
+  // Обработчик нажатия кнопки загрузки
+  const handleUpload = async () => {
+    if (!selectedFile) return;
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    try {
+      await fetch('http://localhost:8000/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      // После успешной загрузки обновляем галерею
+      setSelectedFile(null);
+      setPreviewUrl('');
+      fetchImages();
+    } catch (err) {
+      console.error("Ошибка при загрузке изображения:", err);
+    }
+  };
+
+  // Обработчик поиска
+  const handleSearch = (e) => {
+    e.preventDefault();
+    fetchImages(true);
+  };
+
+  return (
+    <div style={{ padding: '20px' }}>
+      <h1>Загрузка изображения</h1>
+      {/* Форма для загрузки */}
+      <input type="file" accept="image/*" onChange={handleFileChange} />
+      <button onClick={handleUpload} disabled={!selectedFile}>
+        Загрузить
+      </button>
+      {/* Предпросмотр выбранного изображения */}
+      {previewUrl && (
+        <div style={{ marginTop: '10px' }}>
+          <h3>Предпросмотр:</h3>
+          <img src={previewUrl} alt="Предпросмотр" style={{ maxWidth: '300px' }} />
+        </div>
+      )}
+
+      <hr />
+
+      {/* Поисковая форма */}
+      <h1>Поиск по тегам</h1>
+      <form onSubmit={handleSearch}>
+        <input
+          type="text"
+          placeholder="Введите тег для поиска"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button type="submit">Поиск</button>
+        <button type="button" onClick={() => { setQuery(''); fetchImages(); }}>
+          Сброс
+        </button>
+      </form>
+
+      <hr />
+
+      {/* Галерея изображений */}
+      <h1>Галерея</h1>
+      {images.length === 0 && <p>Нет изображений для отображения.</p>}
+      <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+        {images.map(img => (
+          <div key={img.id} style={{ margin: '10px' }}>
+            <img 
+              src={`http://localhost:8000/images/${img.filename}`} 
+              alt="Uploaded" 
+              style={{ maxWidth: '200px', display: 'block' }} 
+            />
+            <div>
+              <strong>Теги:</strong> {img.tags.join(', ')}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default App;
