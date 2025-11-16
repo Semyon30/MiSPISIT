@@ -1,0 +1,135 @@
+# backend/main.py
+
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import sqlite3
+import os
+import uuid
+
+# Создаем папку для хранения изображений, если ее нет
+if not os.path.exists("images"):
+    os.makedirs("images")
+
+app = FastAPI()
+
+# Разрешаем CORS (доступ с React-приложения)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Подключение к SQLite (файл database.db в корне backend/)
+conn = sqlite3.connect("database.db", check_same_thread=False)
+cursor = conn.cursor()
+
+# Создаем таблицы: images, tags, image_tags (если их еще нет)
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT
+    )
+""")
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE
+    )
+""")
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS image_tags (
+        image_id INTEGER,
+        tag_id INTEGER,
+        PRIMARY KEY(image_id, tag_id)
+    )
+""")
+conn.commit()
+
+def predict_tags(path: str):
+    """
+    Заглушка функции для генерации тегов по изображению.
+    В реальном решении здесь вызывалась бы модель ML.
+    """
+    return ["cat", "sunset"]  # пример статических тегов
+
+@app.post("/api/upload")
+async def upload_image(file: UploadFile = File(...)):
+    """
+    Принимаем изображение, сохраняем в папку images и записываем информацию в БД.
+    Генерируем теги через predict_tags().
+    """
+    # Сохраняем файл с уникальным именем
+    extension = os.path.splitext(file.filename)[1]
+    unique_name = f"{uuid.uuid4().hex}{extension}"
+    file_path = os.path.join("images", unique_name)
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Запись информации об изображении в БД
+    cursor.execute("INSERT INTO images (filename) VALUES (?)", (unique_name,))
+    image_id = cursor.lastrowid
+
+    # Генерация и запись тегов
+    tags = predict_tags(file_path)
+    for tag in tags:
+        cursor.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+        cursor.execute("SELECT id FROM tags WHERE name = ?", (tag,))
+        tag_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT OR IGNORE INTO image_tags (image_id, tag_id) VALUES (?, ?)",
+            (image_id, tag_id)
+        )
+    conn.commit()
+
+    return {"filename": unique_name, "tags": tags}
+
+
+@app.get("/api/images")
+def get_images():
+    """
+    Возвращает все изображения с их тегами.
+    """
+    cursor.execute("SELECT id, filename FROM images")
+    result = []
+    for image_id, filename in cursor.fetchall():
+        # Получаем список тегов для изображения
+        cursor.execute("""
+            SELECT tags.name
+            FROM tags
+            JOIN image_tags ON tags.id = image_tags.tag_id
+            WHERE image_tags.image_id = ?
+        """, (image_id,))
+        tags = [row[0] for row in cursor.fetchall()]
+        result.append({"id": image_id, "filename": filename, "tags": tags})
+    return {"images": result}
+
+
+@app.get("/api/search")
+def search_images(q: str):
+    """
+    Поиск изображений по тегу (q) и возврат найденных изображений с их тегами.
+    """
+    cursor.execute("""
+        SELECT DISTINCT images.id, images.filename
+        FROM images
+        JOIN image_tags ON images.id = image_tags.image_id
+        JOIN tags ON tags.id = image_tags.tag_id
+        WHERE tags.name LIKE ?
+    """, (f"%{q}%",))
+    result = []
+    for image_id, filename in cursor.fetchall():
+        cursor.execute("""
+            SELECT tags.name
+            FROM tags
+            JOIN image_tags ON tags.id = image_tags.tag_id
+            WHERE image_tags.image_id = ?
+        """, (image_id,))
+        tags = [row[0] for row in cursor.fetchall()]
+        result.append({"id": image_id, "filename": filename, "tags": tags})
+    return {"images": result}
+
+# Делаем папку images доступной по URL /images
+app.mount("/images", StaticFiles(directory="images"), name="images")
